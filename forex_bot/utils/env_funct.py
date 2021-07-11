@@ -21,9 +21,9 @@ def close_trade(trade_info: np.array, wallet_info: np.array, ohlcv_values: {}, e
     equity = round(balance_before + trade_return, 2)
     balance = equity
 
-    trade_info[-1][10] = close_p
-    trade_info[-1][11] = trade_return
-    trade_info[-1][12] = 'normal'
+    trade_info[-1][6] = close_p
+    trade_info[-1][7] = trade_return
+    trade_info[-1][8] = 'normal'
     position = 0
     episodes_specs['total_trades'] += 1
 
@@ -42,9 +42,6 @@ def terminal(episodes_specs: {}, equity: float):
 
     if step == max_steps:
         reason = 'No steps'
-        done = True
-    elif equity < daily_loss:
-        reason = 'Daily loss'
         done = True
     elif equity < max_loss:
         reason = 'Max loss'

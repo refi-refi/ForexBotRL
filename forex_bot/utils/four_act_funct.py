@@ -43,7 +43,7 @@ def execute_action(wallet_info: np.array, trade_info: np.array,
                 position = -1
                 open_p = ohlcv_values['buy_p']
 
-            trade_size = round(model_params['start_balance'] * model_params['leverage'] * 0.1 / 1e5, 2)
+            trade_size = round(model_params['start_balance'] * model_params['leverage'] * model_params['risk'] / 1e5, 2)
             trade_nr = episodes_specs['total_trades']
 
             new_trade = np.array([
@@ -66,16 +66,15 @@ def execute_action(wallet_info: np.array, trade_info: np.array,
                 episodes_specs['max_loss'] = round(balance * model_params['max_loss_percent'], 2)
 
         else:
-            if position == 1 and action in [Actions.Long, Actions.NoTrade]:
+            if position == 1:
                 close_p = ohlcv_values['buy_p']
                 trade_value = round((trade_size * 1e5) * (1 - (open_p / close_p)), 2)
-                equity = round(balance_before + trade_value, 2)
-
             else:
-                assert position == -1 and action in [Actions.Short, Actions.NoTrade]
+                assert position == -1
                 close_p = ohlcv_values['sell_p']
                 trade_value = round((trade_size * 1e5) * ((open_p / close_p) - 1), 2)
-                equity = round(balance_before + trade_value, 2)
+
+            equity = round(balance_before + trade_value, 2)
 
     wallet_change = np.array([episodes_specs['step'], position, balance, equity, trade_value, trade_return])
     wallet_info[-1] = wallet_change

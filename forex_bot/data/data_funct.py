@@ -4,48 +4,40 @@ import numpy as np
 
 from ta.momentum import RSIIndicator
 from ta.trend import MACD
-from ta.volume import acc_dist_index
-from datetime import datetime, time
+from datetime import time
 from dateutil.parser import *
-from dateutil.relativedelta import *
 
 pd.set_option('display.width', None)
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def train_data(symbol: str = 'EURGBP',
-               timeframe: str = 'M30',
-               end_date: str = '2021-01',
-               start_date: str = None) -> np.array:
+def load_data(symbol: str = 'EURGBP',
+              timeframe: str = 'M30',
+              start_date: str = None,
+              end_date: str = '2021-02') -> pd.DataFrame:
 
     if start_date is not None:
-        assert isinstance(start_date, str), 'start_date must be str!'
         assert parse(start_date) < parse(end_date), 'Start date must be < than end date!'
 
-    mon_end_date = np.busday_offset(end_date, 0, roll='forward', weekmask='Mon')
-
     file_path = os.path.join(ROOT_DIR, f'{symbol}_{timeframe}.csv')
+    df = pd.read_csv(file_path, low_memory=False, encoding='UTF-8', parse_dates=['date_time'], dayfirst=False)
 
-    df = pd.read_csv(file_path, low_memory=False, encoding='UTF-8')
-    df['dt_dt'] = pd.to_datetime(df.date_time, format='%Y-%m-%d %H:%M:%S')
-
+    mon_end_date = np.busday_offset(end_date, 0, roll='forward', weekmask='Mon')
     if start_date is None:
-        df = df.loc[df['dt_dt'] < mon_end_date]
+        df = df.loc[df.date_time < mon_end_date]
     else:
-        df = df.loc[(parse(start_date) <= df['dt_dt']) & (df['dt_dt'] < mon_end_date)]
+        mon_start_date = np.busday_offset(start_date, 0, roll='forward', weekmask='Mon')
+        df = df.loc[(mon_start_date <= df.date_time) & (df.date_time < mon_end_date)]
 
-    df = df.drop(columns=['dt_dt']).to_numpy()
+    return df.round(5)
 
-    return [df]
+def train_test_split(df: pd.DataFrame,
+                     timeframe: str = 'M30',
+                     split_month: str = '2021-01'):
 
+    split_date = np.busday_offset(split_month, 0, roll='forward', weekmask='Mon')
 
-# test = train_data(start_date='2020-12-01')
-# print(test)
-
-
-def test_data(symbol: str = 'EURGBP',
-              timeframe: str = 'M30',
-              test_month: str = '2021-01') -> []:
+    assert df.date_time[0] < split_date < df.date_time[len(df)-1], 'Split cannot be done, no data available!'
 
     steps_in_week = {
         'H1': 120,
@@ -53,24 +45,18 @@ def test_data(symbol: str = 'EURGBP',
         'M15': 480
     }
 
-    test_mondays = [np.busday_offset(test_month, i, roll='forward', weekmask='Mon') for i in range(4)]
+    train_df = df.loc[df.date_time < split_date]
+    train_dfs = [train_df.to_numpy()]
 
-    file_path = os.path.join(ROOT_DIR, f'{symbol}_{timeframe}.csv')
+    test_mondays = [np.busday_offset(split_date, i, roll='forward', weekmask='Mon') for i in range(4)]
 
-    df = pd.read_csv(file_path, low_memory=False, encoding='UTF-8')
-    df['dt_dt'] = pd.to_datetime(df.date_time, format='%Y-%m-%d %H:%M:%S')
-
-    all_test_week = []
+    test_dfs = []
     for monday in test_mondays:
-        ep_data = df.loc[monday <= df['dt_dt']]
-        ep_data = ep_data[:steps_in_week.get(timeframe)].drop(columns=['dt_dt'])
-        all_test_week.append(ep_data.to_numpy())
+        test_ep = df.loc[monday <= df.date_time]
+        test_ep = test_ep[:steps_in_week.get(timeframe)]
+        test_dfs.append(test_ep.to_numpy())
 
-    return all_test_week
-
-
-# this = test_data()
-# print(this)
+    return train_dfs, test_dfs
 
 
 def agg_by_week(df: pd.DataFrame, timeframe):
@@ -97,7 +83,7 @@ def agg_by_week(df: pd.DataFrame, timeframe):
     full_weeks = week_counts[week_counts == steps_in_week].index.values
     in_full = df['week'].isin(full_weeks)
 
-    df = df[in_full].reset_index(drop=True).round(5)
+    df = df[in_full].reset_index(drop=True)
 
     for i in np.arange(0, len(df), steps_in_week):
         start = df.date_time[i]
@@ -105,11 +91,7 @@ def agg_by_week(df: pd.DataFrame, timeframe):
         assert start.isoweekday() == 1 and start.time() == time(0, 0)
         assert end.isoweekday() == 5 and end.time() == end_time
 
-    # save_path = f'data/{input_folder}/agg_by_week'
-    # if not os.path.isdir(save_path):
-    #     os.mkdir(save_path)
-    #
-    # df.to_csv(f'{save_path}/{symbol}_{timeframe}.csv', index=False)
+    df = df.drop(columns=['week']).round(5)
 
     return df
 

@@ -8,7 +8,7 @@ from gym.utils import seeding
 
 from random import randrange
 from datetime import time
-from dateutil.parser import *
+
 from dateutil.relativedelta import *
 from sklearn.preprocessing import minmax_scale
 
@@ -30,7 +30,9 @@ class ForexEnv(gym.Env):
                  commission: bool = False,
                  start_balance: float = 10000.0,
                  leverage: int = 100,
-                 **test_kwargs
+                 risk: float = 10.0,
+                 max_loss: float = 2.5,
+                 test_eps: int = 4,
                  ):
         super(ForexEnv, self).__init__()
 
@@ -39,9 +41,9 @@ class ForexEnv(gym.Env):
         assert mode in ['train_ts', 'train_rand', 'test'], 'Invalid mode selected! Possible options: train, test'
 
         self.action_space = spaces.Discrete(4)
-        self.observation_space = spaces.Dict({
-            'ohlcv': spaces.Box(low=-1, high=1, shape=(9, lookback), dtype=np.float32),
-            'wallet': spaces.Box(low=-1, high=1, shape=(6, lookback), dtype=np.float32),
+        self.observation_space = spaces.Dict(spaces={
+            'ohlcv': spaces.Box(low=-1, high=1, shape=(lookback, 9), dtype=np.float32),
+            'wallet': spaces.Box(low=-1, high=1, shape=(lookback, 6), dtype=np.float32),
             # 'ohlcv_wallet': spaces.Box(low=-1, high=1, shape=(15, lookback), dtype=np.float32),
         })
         self.seed()
@@ -66,11 +68,14 @@ class ForexEnv(gym.Env):
             'model_name': model_name,
             'start_balance': start_balance,
             'lookback': lookback,
-            'leverage': leverage,
+            'risk': risk/100,
+            'max_loss_percent': 1 - (max_loss/100),
             'reward': reward,
+            'leverage': leverage,
             'commission': commission,
             'tf_specs': tf_spec_dict.get(timeframe),
-            'data_specs': mode_data_specs.get(mode)
+            'data_specs': mode_data_specs.get(mode),
+            'test_eps': test_eps
         }
 
         self.ep_specs = {
@@ -103,9 +108,13 @@ class ForexEnv(gym.Env):
 
             self.test_results = pd.DataFrame(columns=single_run_cols)
             self.test_summary = pd.DataFrame(columns=summary_cols)
-            self.train_steps = test_kwargs.get('test_freq')
+            self.train_steps = 0
+            self.test_freq = 0.1
 
-            self.test_result_path = test_kwargs.get('test_path')
+            root_dir = path.dirname(path.abspath(__file__))
+            test_path = root_dir.split('forex_bot')[0]
+
+            self.test_result_path = path.join(path.join(test_path, 'test_results'), f'{model_name}.csv')
             if not path.isfile(self.test_result_path):
                 self.test_summary.to_csv(self.test_result_path, sep=',', index=False, encoding='UTF-8')
 
@@ -137,8 +146,8 @@ class ForexEnv(gym.Env):
             data_index = 0
         self.model_specs['data_specs']['data_index'] = data_index
 
-        ep_start_d = parse(self.active_df[0][2])
-        ep_end_d = parse(self.active_df[-1][2])
+        ep_start_d = self.active_df[0][2]
+        ep_end_d = self.active_df[-1][2]
 
         assert ep_start_d.isoweekday() == 1 and ep_start_d.time() == time(0, 0)
         assert ep_end_d.isoweekday() == 5 and ep_end_d.time() == self.model_specs['tf_specs']['close_time']
@@ -162,7 +171,6 @@ class ForexEnv(gym.Env):
         # TRADE INFO:
         # trade_nr, time, balance_before, position, size, open_p, close_p, pos_return, reason
         self.trade_info = np.empty(shape=(0, 9), dtype=object)
-
         reset_obs = {
             'ohlcv': minmax_scale(np.delete(self.active_df[:lookback], np.s_[0:3], axis=1), feature_range=(-1, 1)),
             'wallet': minmax_scale(self.wallet_info, feature_range=(-1, 1))
@@ -203,7 +211,7 @@ class ForexEnv(gym.Env):
         row = self.model_specs['lookback'] + self.ep_specs['step'] - 1
 
         current_ohlcv = {
-            'real_time': str(parse(self.active_df[row][2]) + self.model_specs['tf_specs']['t_delta']),
+            'real_time': str(self.active_df[row][2] + self.model_specs['tf_specs']['t_delta']),
             'ohlcv_time': self.active_df[row][2],
             'high': round(self.active_df[row][4], 5),
             'low': round(self.active_df[row][5], 5),
@@ -217,8 +225,8 @@ class ForexEnv(gym.Env):
         wallet_info = pd.DataFrame(self.wallet_info,
                                    columns=['step', 'position', 'balance', 'equity', 'trade_value', 'trade_return'])
         trade_info = pd.DataFrame(self.trade_info,
-                                  columns=['trade_nr', 'time', 'balance', 'position', 'trade_size', 'open_p', 'sl',
-                                           'sl_p', 'tp', 'tp_p', 'close_p', 'trade_return', 'reason'])
+                                  columns=['trade_nr', 'time', 'balance', 'position', 'trade_size', 'open_p',
+                                           'close_p', 'trade_return', 'reason'])
         wallet_info = wallet_info[self.model_specs['lookback']:]
 
         start_balance = self.model_specs['start_balance']
@@ -252,13 +260,13 @@ class ForexEnv(gym.Env):
 
         single_run = dict(model_name=self.model_specs['model_name'], subset_data=self.ep_specs['ep_start_date'],
                           balance=balance, min_balance=min_b, max_balance=max_b, current_step=step,
-                          episode_steps=self.model_specs['tf_specs']['steps_in_ep'], total_trades=total_trades,
+                          episode_steps=self.model_specs['tf_specs']['ep_steps'], total_trades=total_trades,
                           bad_trades=bad_trades, good_trades=good_trades, long_t=long_trades, short_t=short_trades,
                           profit_factor=profit_factor, worst_trade=worst_trade, best_trade=best_trade, reward=reward,
                           reason=reason)
         self.test_results = self.test_results.append(single_run, ignore_index=True)
 
-        if len(self.test_results) == self.model_specs['test_episodes']:
+        if len(self.test_results) == 10:
             dtypes = dict(balance='float32', min_balance='float32', max_balance='float32', current_step='int',
                           episode_steps='int', total_trades='int', bad_trades='int', good_trades='int',
                           long_t='int', short_t='int', profit_factor='float32',
@@ -267,7 +275,7 @@ class ForexEnv(gym.Env):
             summary = self.test_results.describe(percentiles=[0.1, 0.25, 0.5, 0.75, 0.9])
 
             good_runs = self.test_results['balance'].loc[self.test_results['balance'] > 0.0].to_list()
-            run_ratio = round(len(good_runs) / self.model_specs['test_episodes'], 4)
+            run_ratio = round(len(good_runs) / self.model_specs['test_eps'], 4)
 
             test_avg = dict(model_name=self.model_specs['model_name'], subset_data=self.ep_specs['ep_start_date'],
                             train_steps=self.train_steps,
@@ -275,7 +283,7 @@ class ForexEnv(gym.Env):
                             min_b=summary['balance']['min'],
                             max_b=summary['balance']['max'],
                             avg_step=summary['current_step']['mean'],
-                            episode_steps=self.model_specs['tf_specs']['steps_in_ep'],
+                            episode_steps=self.model_specs['tf_specs']['ep_steps'],
                             run_ratio=run_ratio,
                             dist_10=summary['balance']['10%'],
                             dist_25=summary['balance']['25%'],
@@ -300,7 +308,7 @@ class ForexEnv(gym.Env):
             self.test_summary = self.test_summary.append(test_avg, ignore_index=True)
             self.test_results = self.test_results[0:0]
 
-            if len(self.test_summary) == self.test_weeks:
+            if len(self.test_summary) == 4:
                 self.test_summary['total_avg_b'] = round(self.test_summary['avg_b'].mean(), 4)
                 self.test_summary['total_avg_r'] = round(self.test_summary['avg_r'].mean(), 4)
                 self.test_summary = self.test_summary.round(4)
@@ -308,7 +316,7 @@ class ForexEnv(gym.Env):
                 self.test_summary.to_csv(path_or_buf=self.test_result_path,
                                          sep=',', index=False, encoding='UTF-8', mode='a', header=None)
 
-                self.train_steps = round(self.train_steps + self.model_specs['test_freq'], 4)
+                self.train_steps = round(self.train_steps + self.test_freq, 4)
                 self.test_summary = self.test_summary[0:0]
             else:
                 pass
