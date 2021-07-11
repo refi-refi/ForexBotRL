@@ -2,7 +2,7 @@ import gym
 import numpy as np
 import pandas as pd
 
-from os import path
+from os import path, makedirs
 from gym import spaces
 from gym.utils import seeding
 
@@ -112,9 +112,11 @@ class ForexEnv(gym.Env):
             self.test_freq = 0.1
 
             root_dir = path.dirname(path.abspath(__file__))
-            test_path = root_dir.split('forex_bot')[0]
+            test_path = path.join(root_dir.split('forex_bot')[0], 'test_results')
+            if not path.isdir(test_path):
+                makedirs(test_path)
 
-            self.test_result_path = path.join(path.join(test_path, 'test_results'), f'{model_name}.csv')
+            self.test_result_path = path.join(test_path, f'{model_name}.csv')
             if not path.isfile(self.test_result_path):
                 self.test_summary.to_csv(self.test_result_path, sep=',', index=False, encoding='UTF-8')
 
